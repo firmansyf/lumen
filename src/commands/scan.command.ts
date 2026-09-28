@@ -24,6 +24,8 @@ import {
   groupIssuesByCategory
 } from "../utils/issue.utils.js";
 
+import type { Issue } from "../types/issue.js";
+
 export interface ScanOptions {
   json?: boolean;
 }
@@ -68,7 +70,7 @@ export async function scanCommand(
    * Combine all issues.
    */
 
-  const rawIssues = [
+  const rawIssues: Issue[] = [
     ...projectIssues,
     ...dependencyIssues,
     ...securityIssues,
@@ -96,6 +98,17 @@ export async function scanCommand(
         absolutePath
       )
     );
+
+    /*
+     * Exit with error when
+     * at least one error exists.
+     */
+
+    if (
+      hasBlockingIssues(issues)
+    ) {
+      process.exitCode = 1;
+    }
 
     return;
   }
@@ -164,11 +177,31 @@ export async function scanCommand(
   printSummary(
     issues
   );
+
+  /*
+   * Exit with error when
+   * at least one error exists.
+   */
+
+  if (
+    hasBlockingIssues(issues)
+  ) {
+    process.exitCode = 1;
+  }
+}
+
+function hasBlockingIssues(
+  issues: Issue[]
+): boolean {
+  return issues.some(
+    (issue) =>
+      issue.severity === "error"
+  );
 }
 
 function printCategory(
   title: string,
-  issues: import("../types/issue.js").Issue[]
+  issues: Issue[]
 ) {
   if (issues.length === 0) {
     return;

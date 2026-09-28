@@ -1370,6 +1370,9 @@ async function scanCommand(projectPath = ".", options = {}) {
         absolutePath
       )
     );
+    if (hasBlockingIssues(issues)) {
+      process.exitCode = 1;
+    }
     return;
   }
   console.log();
@@ -1417,6 +1420,14 @@ async function scanCommand(projectPath = ".", options = {}) {
   );
   printSummary(
     issues
+  );
+  if (hasBlockingIssues(issues)) {
+    process.exitCode = 1;
+  }
+}
+function hasBlockingIssues(issues) {
+  return issues.some(
+    (issue) => issue.severity === "error"
   );
 }
 function printCategory(title, issues) {
