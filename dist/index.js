@@ -4,7 +4,7 @@
 import { Command } from "commander";
 
 // src/commands/scan.command.ts
-import path4 from "path";
+import path7 from "path";
 import pc2 from "picocolors";
 
 // src/analyzers/project.analyzer.ts
@@ -63,7 +63,7 @@ function analyzeProject(projectPath) {
 // src/analyzers/dependency.analyzer.ts
 import fs3 from "fs";
 import path3 from "path";
-import semver from "semver";
+import semver2 from "semver";
 
 // src/services/npm-registry.service.ts
 async function getLatestVersion(packageName) {
@@ -104,6 +104,40 @@ function getInstalledVersion(projectPath, packageName) {
   }
 }
 
+// src/utils/dependency.utils.ts
+import semver from "semver";
+function getDependencyUpdateType(currentVersion, latestVersion) {
+  const diff = semver.diff(
+    currentVersion,
+    latestVersion
+  );
+  switch (diff) {
+    case "major":
+      return "major";
+    case "minor":
+      return "minor";
+    case "patch":
+      return "patch";
+    case "premajor":
+    case "preminor":
+    case "prepatch":
+    case "prerelease":
+      return "prerelease";
+    default:
+      return "unknown";
+  }
+}
+function isVersionInRange(version, range) {
+  try {
+    return semver.satisfies(
+      version,
+      range
+    );
+  } catch {
+    return false;
+  }
+}
+
 // src/analyzers/dependency.analyzer.ts
 async function analyzeDependencies(projectPath) {
   const issues = [];
@@ -114,16 +148,30 @@ async function analyzeDependencies(projectPath) {
   if (!fs3.existsSync(packageJsonPath)) {
     return issues;
   }
-  const packageJson = JSON.parse(
-    fs3.readFileSync(packageJsonPath, "utf-8")
-  );
+  let packageJson;
+  try {
+    packageJson = JSON.parse(
+      fs3.readFileSync(
+        packageJsonPath,
+        "utf-8"
+      )
+    );
+  } catch {
+    issues.push({
+      severity: "error",
+      category: "dependency",
+      title: "Invalid package.json",
+      message: "Lumen could not parse package.json.",
+      file: "package.json",
+      suggestion: "Check the JSON syntax in package.json."
+    });
+    return issues;
+  }
   const dependencies = {
     ...packageJson.dependencies,
     ...packageJson.devDependencies
   };
-  const dependencyEntries = Object.entries(
-    dependencies
-  );
+  const dependencyEntries = Object.entries(dependencies);
   if (dependencyEntries.length === 0) {
     issues.push({
       severity: "info",
@@ -141,66 +189,904 @@ async function analyzeDependencies(projectPath) {
     message: `${dependencyEntries.length} dependencies found.`,
     file: "package.json"
   });
-  for (const [packageName, declaredVersion] of dependencyEntries) {
-    const installedVersion = getInstalledVersion(
-      projectPath,
-      packageName
+  const results = await Promise.all(
+    dependencyEntries.map(
+      async ([packageName, declaredVersion]) => {
+        const installedVersion = getInstalledVersion(
+          projectPath,
+          packageName
+        );
+        if (!installedVersion) {
+          return {
+            severity: "warning",
+            category: "dependency",
+            title: `${packageName} is not installed`,
+            message: `Declared: ${declaredVersion}`,
+            file: "package.json",
+            suggestion: "Run your package manager install command.",
+            metadata: {
+              declaredVersion
+            }
+          };
+        }
+        const latestVersion = await getLatestVersion(
+          packageName
+        );
+        if (!latestVersion) {
+          return {
+            severity: "warning",
+            category: "dependency",
+            title: `Unable to check ${packageName}`,
+            message: `Declared: ${declaredVersion} \xB7 Installed: ${installedVersion}`,
+            file: "package.json",
+            suggestion: "Check your internet connection or npm registry availability.",
+            metadata: {
+              declaredVersion,
+              installedVersion
+            }
+          };
+        }
+        const parsedInstalledVersion = semver2.valid(
+          installedVersion
+        );
+        const parsedLatestVersion = semver2.valid(
+          latestVersion
+        );
+        if (!parsedInstalledVersion || !parsedLatestVersion) {
+          return {
+            severity: "warning",
+            category: "dependency",
+            title: `Unable to compare ${packageName}`,
+            message: `Declared: ${declaredVersion} \xB7 Installed: ${installedVersion} \xB7 Latest: ${latestVersion}`,
+            file: "package.json",
+            suggestion: "Check the dependency version format.",
+            metadata: {
+              declaredVersion,
+              installedVersion,
+              latestVersion
+            }
+          };
+        }
+        const installedMatchesDeclared = isVersionInRange(
+          parsedInstalledVersion,
+          declaredVersion
+        );
+        if (!installedMatchesDeclared) {
+          return {
+            severity: "warning",
+            category: "dependency",
+            title: `${packageName} does not match declared version range`,
+            message: `Declared: ${declaredVersion} \xB7 Installed: ${parsedInstalledVersion}`,
+            file: "package.json",
+            suggestion: `Run your package manager install command to restore ${packageName} to the declared range.`,
+            metadata: {
+              declaredVersion,
+              installedVersion: parsedInstalledVersion
+            }
+          };
+        }
+        const isLatestInDeclaredRange = isVersionInRange(
+          parsedLatestVersion,
+          declaredVersion
+        );
+        const isOutdated = semver2.lt(
+          parsedInstalledVersion,
+          parsedLatestVersion
+        );
+        if (isOutdated) {
+          const updateType = getDependencyUpdateType(
+            parsedInstalledVersion,
+            parsedLatestVersion
+          );
+          if (!isLatestInDeclaredRange) {
+            return {
+              severity: updateType === "major" ? "warning" : "info",
+              category: "dependency",
+              title: `${packageName} has a ${updateType} update outside declared range`,
+              message: `Declared: ${declaredVersion} \xB7 Installed: ${parsedInstalledVersion} \xB7 Latest: ${parsedLatestVersion}`,
+              file: "package.json",
+              suggestion: `Review the ${updateType} upgrade before changing the declared version.`,
+              metadata: {
+                declaredVersion,
+                installedVersion: parsedInstalledVersion,
+                latestVersion: parsedLatestVersion,
+                updateType
+              }
+            };
+          }
+          return {
+            severity: "warning",
+            category: "dependency",
+            title: `${packageName} has a ${updateType} update available`,
+            message: `Declared: ${declaredVersion} \xB7 Installed: ${parsedInstalledVersion} \xB7 Latest: ${parsedLatestVersion}`,
+            file: "package.json",
+            suggestion: `Update ${packageName} to ${parsedLatestVersion}.`,
+            metadata: {
+              declaredVersion,
+              installedVersion: parsedInstalledVersion,
+              latestVersion: parsedLatestVersion,
+              updateType
+            }
+          };
+        }
+        return {
+          severity: "info",
+          category: "dependency",
+          title: `${packageName} is up to date`,
+          message: `Declared: ${declaredVersion} \xB7 Installed: ${parsedInstalledVersion} \xB7 Latest: ${parsedLatestVersion}`,
+          file: "package.json",
+          metadata: {
+            declaredVersion,
+            installedVersion: parsedInstalledVersion,
+            latestVersion: parsedLatestVersion
+          }
+        };
+      }
+    )
+  );
+  issues.push(...results);
+  return issues;
+}
+
+// src/analyzers/security.analyzer.ts
+import fs4 from "fs";
+import path4 from "path";
+
+// src/services/osv.service.ts
+async function queryOsv(packageName, version) {
+  const query = {
+    package: {
+      ecosystem: "npm",
+      name: packageName
+    },
+    version
+  };
+  try {
+    const response = await fetch(
+      "https://api.osv.dev/v1/query",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(query)
+      }
     );
-    if (!installedVersion) {
-      issues.push({
-        severity: "warning",
-        category: "dependency",
-        title: `${packageName} is not installed`,
-        message: `The dependency is declared in package.json but was not found in node_modules.`,
-        file: "package.json",
-        suggestion: "Run your package manager install command."
-      });
-      continue;
+    if (!response.ok) {
+      return [];
     }
-    const latestVersion = await getLatestVersion(packageName);
-    if (!latestVersion) {
-      issues.push({
-        severity: "warning",
-        category: "dependency",
-        title: `Unable to check ${packageName}`,
-        message: `Could not retrieve the latest version from npm.`,
-        file: "package.json"
-      });
-      continue;
+    const data = await response.json();
+    return data.vulns ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// src/utils/security.utils.ts
+function getCvssScore(vulnerability) {
+  const cvss = vulnerability.severity?.find(
+    (item) => item.type === "CVSS_V3"
+  );
+  if (!cvss?.score) {
+    return void 0;
+  }
+  const match = cvss.score.match(
+    /CVSS:3\.\d\/.*?\/(\d+(?:\.\d+)?)$/
+  );
+  if (!match) {
+    return void 0;
+  }
+  const score = Number(match[1]);
+  return Number.isNaN(score) ? void 0 : score;
+}
+function getCve(vulnerability) {
+  return vulnerability.aliases?.find(
+    (alias) => alias.startsWith("CVE-")
+  );
+}
+function getFixedVersion(vulnerability) {
+  for (const affected of vulnerability.affected ?? []) {
+    for (const range of affected.ranges ?? []) {
+      for (const event of range.events ?? []) {
+        if (event.fixed) {
+          return event.fixed;
+        }
+      }
     }
-    const parsedInstalledVersion = semver.valid(installedVersion);
-    const parsedLatestVersion = semver.valid(latestVersion);
-    if (!parsedInstalledVersion || !parsedLatestVersion) {
-      issues.push({
-        severity: "warning",
-        category: "dependency",
-        title: `Unable to compare ${packageName}`,
-        message: `Could not compare installed and latest versions.`,
-        file: "package.json"
-      });
-      continue;
-    }
-    const isOutdated = semver.lt(
-      parsedInstalledVersion,
-      parsedLatestVersion
+  }
+  return void 0;
+}
+function getSecuritySeverity(score) {
+  if (score === void 0) {
+    return "warning";
+  }
+  if (score >= 7) {
+    return "error";
+  }
+  if (score >= 4) {
+    return "warning";
+  }
+  return "info";
+}
+
+// src/analyzers/security.analyzer.ts
+async function analyzeSecurity(projectPath) {
+  const packageJsonPath = path4.join(
+    projectPath,
+    "package.json"
+  );
+  if (!fs4.existsSync(packageJsonPath)) {
+    return [];
+  }
+  const packageJson = JSON.parse(
+    fs4.readFileSync(packageJsonPath, "utf-8")
+  );
+  const dependencies = {
+    ...packageJson.dependencies,
+    ...packageJson.devDependencies
+  };
+  const entries = Object.entries(dependencies);
+  const results = await Promise.all(
+    entries.map(
+      async ([packageName]) => {
+        const installedVersion = getInstalledVersion(
+          projectPath,
+          packageName
+        );
+        if (!installedVersion) {
+          return [];
+        }
+        const vulnerabilities = await queryOsv(
+          packageName,
+          installedVersion
+        );
+        return vulnerabilities.map(
+          (vulnerability) => {
+            const cvss = getCvssScore(vulnerability);
+            const cve = getCve(vulnerability);
+            const fixedVersion = getFixedVersion(vulnerability);
+            const severity = getSecuritySeverity(cvss);
+            const identifier = cve ?? vulnerability.id;
+            return {
+              severity,
+              category: "security",
+              title: `${packageName} has a security vulnerability`,
+              message: vulnerability.summary ?? vulnerability.details ?? `Security advisory ${identifier}`,
+              file: "package.json",
+              suggestion: fixedVersion ? `Update ${packageName} to ${fixedVersion}.` : `Review ${identifier} and update ${packageName}.`,
+              metadata: {
+                advisoryId: vulnerability.id,
+                cve,
+                cvss,
+                installedVersion,
+                fixedVersion
+              }
+            };
+          }
+        );
+      }
+    )
+  );
+  const issues = results.flat();
+  if (issues.length === 0) {
+    return [
+      {
+        severity: "info",
+        category: "security",
+        title: "No vulnerabilities found",
+        message: "No known vulnerabilities were found in the installed dependencies."
+      }
+    ];
+  }
+  return issues;
+}
+
+// src/analyzers/secret.analyzer.ts
+import fs5 from "fs";
+import path5 from "path";
+
+// src/utils/secret.utils.ts
+var SECRET_PATTERNS = [
+  {
+    type: "private-key",
+    name: "Private Key",
+    pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/i
+  },
+  {
+    type: "aws-access-key",
+    name: "AWS Access Key",
+    pattern: /\bAKIA[0-9A-Z]{16}\b/i
+  },
+  {
+    type: "github-token",
+    name: "GitHub Token",
+    pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/
+  },
+  {
+    type: "jwt",
+    name: "JWT",
+    pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/
+  },
+  {
+    type: "database-url",
+    name: "Database URL",
+    pattern: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s"'`]+/i
+  },
+  {
+    type: "api-key",
+    name: "API Key",
+    pattern: /\b[A-Za-z_$]*api[_-]?key\b\s*[:=]\s*["'`][^"'`]{12,}["'`]/i
+  },
+  {
+    type: "generic-secret",
+    name: "Generic Secret",
+    pattern: /\b(?:secret|token|password|passwd|auth[_-]?token)\s*[:=]\s*["'`][^"'`]{8,}["'`]/i
+  }
+];
+
+// src/analyzers/secret.analyzer.ts
+var IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".expo",
+  "coverage",
+  ".cache"
+]);
+var IGNORED_FILES = /* @__PURE__ */ new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock"
+]);
+function shouldIgnore(filePath) {
+  const parts = filePath.split(
+    path5.sep
+  );
+  if (parts.some(
+    (part) => IGNORED_DIRECTORIES.has(part)
+  )) {
+    return true;
+  }
+  return IGNORED_FILES.has(
+    path5.basename(filePath)
+  );
+}
+function getFiles(directory) {
+  const files = [];
+  if (shouldIgnore(directory)) {
+    return files;
+  }
+  let entries;
+  try {
+    entries = fs5.readdirSync(
+      directory,
+      {
+        withFileTypes: true
+      }
     );
-    if (isOutdated) {
-      issues.push({
-        severity: "warning",
-        category: "dependency",
-        title: `${packageName} is outdated`,
-        message: `Installed: ${parsedInstalledVersion} \u2192 Latest: ${parsedLatestVersion}`,
-        file: "package.json",
-        suggestion: `Update ${packageName} to ${parsedLatestVersion}.`
-      });
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    const fullPath = path5.join(
+      directory,
+      entry.name
+    );
+    if (shouldIgnore(fullPath)) {
       continue;
     }
+    if (entry.isDirectory()) {
+      files.push(
+        ...getFiles(fullPath)
+      );
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+function getLineNumber(content, index) {
+  return content.slice(0, index).split("\n").length;
+}
+function analyzeSecrets(projectPath) {
+  const issues = [];
+  const files = getFiles(
+    projectPath
+  );
+  for (const filePath of files) {
+    let content;
+    try {
+      const stats = fs5.statSync(filePath);
+      if (stats.size > 1024 * 1024) {
+        continue;
+      }
+      content = fs5.readFileSync(
+        filePath,
+        "utf-8"
+      );
+    } catch {
+      continue;
+    }
+    for (const secret of SECRET_PATTERNS) {
+      const regex = new RegExp(
+        secret.pattern.source,
+        secret.pattern.flags.includes("g") ? secret.pattern.flags : `${secret.pattern.flags}g`
+      );
+      let match;
+      while ((match = regex.exec(content)) !== null) {
+        const relativePath = path5.relative(
+          projectPath,
+          filePath
+        );
+        const line = getLineNumber(
+          content,
+          match.index
+        );
+        issues.push({
+          severity: "error",
+          category: "security",
+          title: `${secret.name} detected`,
+          message: `Potential ${secret.name.toLowerCase()} found in ${relativePath}.`,
+          file: relativePath,
+          suggestion: "Remove the secret from source code and store it in environment variables or a secure secret manager.",
+          metadata: {
+            secretType: secret.type,
+            line
+          }
+        });
+        if (match[0].length === 0) {
+          regex.lastIndex++;
+        }
+      }
+    }
+  }
+  if (issues.length === 0) {
+    return [
+      {
+        severity: "info",
+        category: "security",
+        title: "No secrets detected",
+        message: "No known hardcoded secrets were detected in the scanned files."
+      }
+    ];
+  }
+  return issues;
+}
+
+// src/analyzers/environment.analyzer.ts
+import fs7 from "fs";
+import path6 from "path";
+
+// src/utils/environment.utils.ts
+import fs6 from "fs";
+function parseEnvironmentVariables(content) {
+  const variables = /* @__PURE__ */ new Set();
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith("#")) {
+      continue;
+    }
+    const match = trimmedLine.match(
+      /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/
+    );
+    if (!match) {
+      continue;
+    }
+    variables.add(match[1]);
+  }
+  return variables;
+}
+function readEnvironmentFile(filePath) {
+  if (!fs6.existsSync(filePath)) {
+    return /* @__PURE__ */ new Set();
+  }
+  try {
+    const content = fs6.readFileSync(
+      filePath,
+      "utf-8"
+    );
+    return parseEnvironmentVariables(
+      content
+    );
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function extractEnvironmentVariables(content) {
+  const variables = /* @__PURE__ */ new Set();
+  const processEnvRegex = /\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)/g;
+  let match;
+  while ((match = processEnvRegex.exec(content)) !== null) {
+    variables.add(match[1]);
+  }
+  const importMetaEnvRegex = /\bimport\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g;
+  while ((match = importMetaEnvRegex.exec(content)) !== null) {
+    variables.add(match[1]);
+  }
+  return variables;
+}
+
+// src/analyzers/environment.analyzer.ts
+var IGNORED_DIRECTORIES2 = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".expo",
+  "coverage",
+  ".cache"
+]);
+var IGNORED_FILES2 = /* @__PURE__ */ new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock"
+]);
+var SOURCE_EXTENSIONS = /* @__PURE__ */ new Set([
+  ".js",
+  ".jsx",
+  ".ts",
+  ".tsx",
+  ".mjs",
+  ".cjs",
+  ".mts",
+  ".cts"
+]);
+function shouldIgnore2(filePath) {
+  const parts = filePath.split(path6.sep);
+  if (parts.some(
+    (part) => IGNORED_DIRECTORIES2.has(part)
+  )) {
+    return true;
+  }
+  return IGNORED_FILES2.has(
+    path6.basename(filePath)
+  );
+}
+function getSourceFiles(directory) {
+  const files = [];
+  if (shouldIgnore2(directory)) {
+    return files;
+  }
+  let entries;
+  try {
+    entries = fs7.readdirSync(
+      directory,
+      {
+        withFileTypes: true
+      }
+    );
+  } catch {
+    return files;
+  }
+  for (const entry of entries) {
+    const fullPath = path6.join(
+      directory,
+      entry.name
+    );
+    if (shouldIgnore2(fullPath)) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      files.push(
+        ...getSourceFiles(
+          fullPath
+        )
+      );
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    const extension = path6.extname(entry.name);
+    if (SOURCE_EXTENSIONS.has(
+      extension
+    )) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+function getLineNumber2(content, index) {
+  return content.slice(0, index).split("\n").length;
+}
+function getReferencedVariables(projectPath) {
+  const references = /* @__PURE__ */ new Map();
+  const files = getSourceFiles(
+    projectPath
+  );
+  for (const filePath of files) {
+    let content;
+    try {
+      const stats = fs7.statSync(filePath);
+      if (stats.size > 1024 * 1024) {
+        continue;
+      }
+      content = fs7.readFileSync(
+        filePath,
+        "utf-8"
+      );
+    } catch {
+      continue;
+    }
+    const variables = extractEnvironmentVariables(
+      content
+    );
+    for (const variable of variables) {
+      if (references.has(variable)) {
+        continue;
+      }
+      const processRegex = new RegExp(
+        `\\bprocess\\.env\\.${variable}\\b`
+      );
+      const importMetaRegex = new RegExp(
+        `\\bimport\\.meta\\.env\\.${variable}\\b`
+      );
+      const processMatch = processRegex.exec(content);
+      const importMetaMatch = importMetaRegex.exec(content);
+      const match = processMatch ?? importMetaMatch;
+      if (!match) {
+        continue;
+      }
+      const relativePath = path6.relative(
+        projectPath,
+        filePath
+      );
+      references.set(
+        variable,
+        {
+          file: relativePath,
+          line: getLineNumber2(
+            content,
+            match.index
+          )
+        }
+      );
+    }
+  }
+  return references;
+}
+function isGitignored(projectPath, target) {
+  const gitignorePath = path6.join(
+    projectPath,
+    ".gitignore"
+  );
+  if (!fs7.existsSync(
+    gitignorePath
+  )) {
+    return false;
+  }
+  let content;
+  try {
+    content = fs7.readFileSync(
+      gitignorePath,
+      "utf-8"
+    );
+  } catch {
+    return false;
+  }
+  const lines = content.split("\n");
+  const normalizedTarget = target.replace(
+    /^\//,
+    ""
+  );
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const normalized = trimmed.replace(
+      /^\//,
+      ""
+    ).replace(
+      /\/$/,
+      ""
+    );
+    if (normalized === normalizedTarget) {
+      return true;
+    }
+    if (normalized === ".env*" && normalizedTarget.startsWith(
+      ".env"
+    )) {
+      return true;
+    }
+    if (normalized === "*.env" && normalizedTarget.endsWith(
+      ".env"
+    )) {
+      return true;
+    }
+  }
+  return false;
+}
+function analyzeEnvironment(projectPath) {
+  const issues = [];
+  const envPath = path6.join(
+    projectPath,
+    ".env"
+  );
+  const envExamplePath = path6.join(
+    projectPath,
+    ".env.example"
+  );
+  const hasEnv = fs7.existsSync(envPath);
+  const hasEnvExample = fs7.existsSync(
+    envExamplePath
+  );
+  const envVariables = readEnvironmentFile(
+    envPath
+  );
+  const exampleVariables = readEnvironmentFile(
+    envExamplePath
+  );
+  if (!hasEnv) {
     issues.push({
       severity: "info",
-      category: "dependency",
-      title: `${packageName} is up to date`,
-      message: `Installed: ${parsedInstalledVersion} \xB7 Latest: ${parsedLatestVersion}`,
-      file: "package.json"
+      category: "environment",
+      title: ".env file not found",
+      message: "No .env file was found in the project root.",
+      suggestion: "Create a .env file if your project requires local environment variables.",
+      metadata: {
+        environmentIssueType: "missing-env-file",
+        environmentFile: ".env"
+      }
+    });
+  } else {
+    issues.push({
+      severity: "info",
+      category: "environment",
+      title: ".env file detected",
+      message: `${envVariables.size} environment variables found in .env.`,
+      file: ".env",
+      metadata: {
+        environmentFile: ".env"
+      }
+    });
+  }
+  if (!hasEnvExample) {
+    issues.push({
+      severity: "warning",
+      category: "environment",
+      title: ".env.example not found",
+      message: "No .env.example file was found in the project root.",
+      suggestion: "Create .env.example to document the environment variables required by the project.",
+      metadata: {
+        environmentFile: ".env.example"
+      }
+    });
+  } else {
+    issues.push({
+      severity: "info",
+      category: "environment",
+      title: ".env.example detected",
+      message: `${exampleVariables.size} environment variables documented.`,
+      file: ".env.example",
+      metadata: {
+        environmentFile: ".env.example"
+      }
+    });
+  }
+  if (hasEnv && !isGitignored(
+    projectPath,
+    ".env"
+  )) {
+    issues.push({
+      severity: "error",
+      category: "environment",
+      title: ".env is not ignored by Git",
+      message: "The .env file may be committed to the repository.",
+      file: ".gitignore",
+      suggestion: "Add .env to .gitignore to prevent environment secrets from being committed.",
+      metadata: {
+        environmentIssueType: "gitignore-missing",
+        environmentFile: ".env"
+      }
+    });
+  }
+  const references = getReferencedVariables(
+    projectPath
+  );
+  if (references.size > 0 && !hasEnv) {
+    for (const [
+      variable,
+      reference
+    ] of references) {
+      issues.push({
+        severity: "warning",
+        category: "environment",
+        title: `${variable} requires environment configuration`,
+        message: `Environment variable ${variable} is referenced by the source code, but .env was not found.`,
+        file: reference.file,
+        suggestion: `Define ${variable} in the appropriate environment configuration.`,
+        metadata: {
+          envVariable: variable,
+          line: reference.line,
+          environmentIssueType: "missing-variable"
+        }
+      });
+    }
+  }
+  if (hasEnv) {
+    for (const [
+      variable,
+      reference
+    ] of references) {
+      if (envVariables.has(variable)) {
+        continue;
+      }
+      issues.push({
+        severity: "warning",
+        category: "environment",
+        title: `${variable} is missing from .env`,
+        message: `The source code references ${variable}, but it is not defined in .env.`,
+        file: reference.file,
+        suggestion: `Add ${variable} to your local environment configuration.`,
+        metadata: {
+          envVariable: variable,
+          line: reference.line,
+          environmentIssueType: "missing-variable"
+        }
+      });
+    }
+  }
+  if (hasEnv && hasEnvExample) {
+    for (const variable of envVariables) {
+      if (exampleVariables.has(
+        variable
+      )) {
+        continue;
+      }
+      issues.push({
+        severity: "info",
+        category: "environment",
+        title: `${variable} is not documented in .env.example`,
+        message: `${variable} exists in .env but is not documented in .env.example.`,
+        file: ".env.example",
+        suggestion: `Add ${variable}= to .env.example without exposing the actual secret value.`,
+        metadata: {
+          envVariable: variable,
+          environmentIssueType: "undocumented-variable",
+          environmentFile: ".env.example"
+        }
+      });
+    }
+  }
+  if (hasEnvExample) {
+    for (const [
+      variable,
+      reference
+    ] of references) {
+      if (exampleVariables.has(
+        variable
+      )) {
+        continue;
+      }
+      issues.push({
+        severity: "warning",
+        category: "environment",
+        title: `${variable} is not documented`,
+        message: `The source code references ${variable}, but it is not listed in .env.example.`,
+        file: ".env.example",
+        suggestion: `Add ${variable}= to .env.example.`,
+        metadata: {
+          envVariable: variable,
+          line: reference.line,
+          environmentIssueType: "undocumented-variable",
+          environmentFile: ".env.example"
+        }
+      });
+    }
+  }
+  if (references.size === 0 && !hasEnv && !hasEnvExample) {
+    issues.push({
+      severity: "info",
+      category: "environment",
+      title: "No environment configuration detected",
+      message: "Lumen did not detect environment variable usage or environment files."
     });
   }
   return issues;
@@ -218,15 +1104,134 @@ function getIcon(severity) {
       return pc.red("\u2717");
   }
 }
-function printIssue(issue) {
-  const icon = getIcon(issue.severity);
-  console.log(`${icon} ${issue.title}`);
-  console.log(`  ${issue.message}`);
-  if (issue.file) {
-    console.log(`  File: ${issue.file}`);
+function getUpdateLabel(updateType) {
+  switch (updateType) {
+    case "major":
+      return pc.red("Major update");
+    case "minor":
+      return pc.yellow("Minor update");
+    case "patch":
+      return pc.blue("Patch update");
+    case "prerelease":
+      return pc.magenta("Prerelease update");
+    default:
+      return pc.yellow("Update available");
   }
+}
+function printDependencyMetadata(issue) {
+  if (issue.category !== "dependency" || !issue.metadata) {
+    return;
+  }
+  const {
+    declaredVersion,
+    installedVersion,
+    latestVersion,
+    updateType
+  } = issue.metadata;
+  if (declaredVersion) {
+    console.log(
+      `  Declared: ${declaredVersion}`
+    );
+  }
+  if (installedVersion) {
+    console.log(
+      `  Installed: ${installedVersion}`
+    );
+  }
+  if (latestVersion) {
+    console.log(
+      `  Latest: ${latestVersion}`
+    );
+  }
+  if (updateType) {
+    console.log(
+      `  Type: ${getUpdateLabel(updateType)}`
+    );
+  }
+}
+function printSecurityMetadata(issue) {
+  if (issue.category !== "security" || !issue.metadata) {
+    return;
+  }
+  const metadata = issue.metadata;
+  if (metadata.secretType) {
+    console.log(
+      `  Type: ${metadata.secretType}`
+    );
+  }
+  if (metadata.line) {
+    console.log(
+      `  Line: ${metadata.line}`
+    );
+  }
+  if (metadata.cve) {
+    console.log(
+      `  CVE: ${metadata.cve}`
+    );
+  }
+  if (metadata.advisoryId) {
+    console.log(
+      `  Advisory: ${metadata.advisoryId}`
+    );
+  }
+  if (metadata.cvss !== void 0) {
+    console.log(
+      `  CVSS: ${metadata.cvss}`
+    );
+  }
+  if (metadata.installedVersion) {
+    console.log(
+      `  Installed: ${metadata.installedVersion}`
+    );
+  }
+  if (metadata.fixedVersion) {
+    console.log(
+      `  Fixed in: ${metadata.fixedVersion}`
+    );
+  }
+}
+function printEnvironmentMetadata(issue) {
+  if (issue.category !== "environment" || !issue.metadata) {
+    return;
+  }
+  if (issue.metadata.envVariable) {
+    console.log(
+      `  Variable: ${issue.metadata.envVariable}`
+    );
+  }
+  if (issue.metadata.line) {
+    console.log(
+      `  Line: ${issue.metadata.line}`
+    );
+  }
+  if (issue.metadata.environmentFile) {
+    console.log(
+      `  Environment file: ${issue.metadata.environmentFile}`
+    );
+  }
+}
+function printIssue(issue) {
+  const icon = getIcon(
+    issue.severity
+  );
+  console.log(
+    `${icon} ${issue.title}`
+  );
+  console.log(
+    `  ${issue.message}`
+  );
+  if (issue.file) {
+    console.log(
+      `  File: ${issue.file}`
+    );
+  }
+  printDependencyMetadata(issue);
+  printSecurityMetadata(issue);
+  printEnvironmentMetadata(issue);
   if (issue.suggestion) {
-    console.log(`  Suggestion: ${issue.suggestion}`);
+    console.log(
+      `  Suggestion: ${issue.suggestion}`
+    );
   }
   console.log();
 }
@@ -241,7 +1246,9 @@ function printSummary(issues) {
     (issue) => issue.severity === "info"
   ).length;
   console.log(
-    pc.dim("\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+    pc.dim(
+      "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+    )
   );
   console.log(
     `${pc.red(`${errors} errors`)} \xB7 ${pc.yellow(`${warnings} warnings`)} \xB7 ${pc.green(`${infos} info`)}`
@@ -249,31 +1256,206 @@ function printSummary(issues) {
   console.log();
 }
 
+// src/formatters/json.formatter.ts
+function formatJsonResult(issues, scannedPath) {
+  const errors = issues.filter(
+    (issue) => issue.severity === "error"
+  ).length;
+  const warnings = issues.filter(
+    (issue) => issue.severity === "warning"
+  ).length;
+  const infos = issues.filter(
+    (issue) => issue.severity === "info"
+  ).length;
+  const result = {
+    tool: "lumen",
+    version: "0.1.0",
+    scannedPath,
+    summary: {
+      total: issues.length,
+      errors,
+      warnings,
+      infos
+    },
+    issues
+  };
+  return JSON.stringify(
+    result,
+    null,
+    2
+  );
+}
+
+// src/utils/issue.utils.ts
+function getIssueKey(issue) {
+  return [
+    issue.category,
+    issue.title,
+    issue.file ?? "",
+    issue.metadata?.line ?? "",
+    issue.metadata?.envVariable ?? "",
+    issue.metadata?.secretType ?? "",
+    issue.metadata?.advisoryId ?? "",
+    issue.metadata?.cve ?? ""
+  ].join("|");
+}
+function deduplicateIssues(issues) {
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const issue of issues) {
+    const key = getIssueKey(issue);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(issue);
+  }
+  return result;
+}
+function groupIssuesByCategory(issues) {
+  return {
+    project: issues.filter(
+      (issue) => issue.category === "project"
+    ),
+    dependency: issues.filter(
+      (issue) => issue.category === "dependency"
+    ),
+    code: issues.filter(
+      (issue) => issue.category === "code"
+    ),
+    security: issues.filter(
+      (issue) => issue.category === "security"
+    ),
+    environment: issues.filter(
+      (issue) => issue.category === "environment"
+    ),
+    configuration: issues.filter(
+      (issue) => issue.category === "configuration"
+    )
+  };
+}
+
 // src/commands/scan.command.ts
-async function scanCommand(projectPath = ".") {
-  const absolutePath = path4.resolve(projectPath);
-  console.log();
-  console.log(pc2.bold("Lumen"));
-  console.log(pc2.dim("Illuminate your code."));
+async function scanCommand(projectPath = ".", options = {}) {
+  const absolutePath = path7.resolve(projectPath);
+  const projectIssues = analyzeProject(
+    absolutePath
+  );
+  const dependencyIssues = await analyzeDependencies(
+    absolutePath
+  );
+  const securityIssues = await analyzeSecurity(
+    absolutePath
+  );
+  const secretIssues = analyzeSecrets(
+    absolutePath
+  );
+  const environmentIssues = analyzeEnvironment(
+    absolutePath
+  );
+  const rawIssues = [
+    ...projectIssues,
+    ...dependencyIssues,
+    ...securityIssues,
+    ...secretIssues,
+    ...environmentIssues
+  ];
+  const issues = deduplicateIssues(
+    rawIssues
+  );
+  if (options.json) {
+    console.log(
+      formatJsonResult(
+        issues,
+        absolutePath
+      )
+    );
+    return;
+  }
   console.log();
   console.log(
-    pc2.dim(`Scanning: ${absolutePath}`)
+    pc2.bold("Lumen")
+  );
+  console.log(
+    pc2.dim(
+      "Illuminate your code."
+    )
   );
   console.log();
-  const projectIssues = analyzeProject(absolutePath);
-  const dependencyIssues = await analyzeDependencies(absolutePath);
-  const issues = [
-    ...projectIssues,
-    ...dependencyIssues
-  ];
+  console.log(
+    pc2.dim(
+      `Scanning: ${absolutePath}`
+    )
+  );
+  console.log();
+  const grouped = groupIssuesByCategory(
+    issues
+  );
+  printCategory(
+    "Project",
+    grouped.project
+  );
+  printCategory(
+    "Dependencies",
+    grouped.dependency
+  );
+  printCategory(
+    "Security",
+    grouped.security
+  );
+  printCategory(
+    "Environment",
+    grouped.environment
+  );
+  printCategory(
+    "Code",
+    grouped.code
+  );
+  printCategory(
+    "Configuration",
+    grouped.configuration
+  );
+  printSummary(
+    issues
+  );
+}
+function printCategory(title, issues) {
+  if (issues.length === 0) {
+    return;
+  }
+  console.log(
+    pc2.bold(title)
+  );
+  console.log(
+    pc2.dim(
+      "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+    )
+  );
   for (const issue of issues) {
     printIssue(issue);
   }
-  printSummary(issues);
 }
 
 // src/index.ts
 var program = new Command();
-program.name("lumen").description("Illuminate your code.").version("0.1.0");
-program.command("scan").description("Analyze your project").argument("[path]", "Project path", ".").action(scanCommand);
+program.name("lumen").description(
+  "Illuminate your code."
+).version("0.1.0");
+program.command("scan").description(
+  "Analyze your project"
+).argument(
+  "[path]",
+  "Project path",
+  "."
+).option(
+  "--json",
+  "Output scan results as JSON"
+).action(
+  async (path8, options) => {
+    await scanCommand(
+      path8,
+      options
+    );
+  }
+);
 program.parse();
