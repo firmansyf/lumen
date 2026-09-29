@@ -32,12 +32,17 @@ function normalizePath(
 export function loadLumenIgnore(
   projectPath: string
 ): string[] {
-  const ignorePath = path.join(
-    projectPath,
-    ".lumenignore"
-  );
+  const ignorePath =
+    path.join(
+      projectPath,
+      ".lumenignore"
+    );
 
-  if (!fs.existsSync(ignorePath)) {
+  if (
+    !fs.existsSync(
+      ignorePath
+    )
+  ) {
     return [];
   }
 
@@ -48,8 +53,9 @@ export function loadLumenIgnore(
         "utf-8"
       )
       .split(/\r?\n/)
-      .map((line) =>
-        line.trim()
+      .map(
+        (line) =>
+          line.trim()
       )
       .filter(
         (line) =>
@@ -61,19 +67,36 @@ export function loadLumenIgnore(
   }
 }
 
+export function mergeIgnorePatterns(
+  lumenIgnore: string[],
+  configIgnore: string[]
+): string[] {
+  return [
+    ...new Set([
+      ...lumenIgnore,
+      ...configIgnore
+    ])
+  ];
+}
+
 function globToRegExp(
   pattern: string
 ): RegExp {
   let regex = "";
   let index = 0;
 
-  while (index < pattern.length) {
+  while (
+    index < pattern.length
+  ) {
     const char =
       pattern[index];
 
-    if (char === "*") {
+    if (
+      char === "*"
+    ) {
       if (
-        pattern[index + 1] === "*"
+        pattern[index + 1] ===
+        "*"
       ) {
         regex += ".*";
         index += 2;
@@ -85,7 +108,9 @@ function globToRegExp(
       continue;
     }
 
-    if (char === "?") {
+    if (
+      char === "?"
+    ) {
       regex += "[^/]";
       index++;
       continue;
@@ -119,9 +144,13 @@ function matchesPattern(
     );
 
   const isDirectoryPattern =
-    normalizedPattern.endsWith("/");
+    normalizedPattern.endsWith(
+      "/"
+    );
 
-  if (isDirectoryPattern) {
+  if (
+    isDirectoryPattern
+  ) {
     normalizedPattern =
       normalizedPattern.replace(
         /\/+$/,
@@ -129,19 +158,9 @@ function matchesPattern(
       );
   }
 
-  /*
-   * Directory pattern.
-   *
-   * Example:
-   *
-   * src/tests/
-   *
-   * matches:
-   *
-   * src/tests
-   * src/tests/example.ts
-   */
-  if (isDirectoryPattern) {
+  if (
+    isDirectoryPattern
+  ) {
     return (
       normalizedPath ===
         normalizedPattern ||
@@ -151,42 +170,27 @@ function matchesPattern(
     );
   }
 
-  /*
-   * If the pattern does not contain
-   * a slash, treat it as a name that
-   * can appear at any level.
-   *
-   * Example:
-   *
-   * fixtures
-   *
-   * matches:
-   *
-   * fixtures
-   * src/fixtures
-   * test/fixtures
-   */
   if (
-    !normalizedPattern.includes("/")
+    !normalizedPattern.includes(
+      "/"
+    )
   ) {
     const parts =
-      normalizedPath.split("/");
+      normalizedPath.split(
+        "/"
+      );
+
+    const regex =
+      globToRegExp(
+        normalizedPattern
+      );
 
     return parts.some(
       (part) =>
-        globToRegExp(
-          normalizedPattern
-        ).test(part)
+        regex.test(part)
     );
   }
 
-  /*
-   * Path pattern.
-   *
-   * Example:
-   *
-   * src/tests/*.ts
-   */
   return globToRegExp(
     normalizedPattern
   ).test(
@@ -209,31 +213,28 @@ export function shouldIgnorePath(
 
   if (
     relativePath === "" ||
-    relativePath.startsWith("../")
-  ) {
-    return true;
-  }
-
-  const parts =
-    relativePath.split("/");
-
-  /*
-   * Default ignored directories.
-   */
-
-  if (
-    parts.some((part) =>
-      DEFAULT_IGNORED_DIRECTORIES.has(
-        part
-      )
+    relativePath.startsWith(
+      "../"
     )
   ) {
     return true;
   }
 
-  /*
-   * Default ignored files.
-   */
+  const parts =
+    relativePath.split(
+      "/"
+    );
+
+  if (
+    parts.some(
+      (part) =>
+        DEFAULT_IGNORED_DIRECTORIES.has(
+          part
+        )
+    )
+  ) {
+    return true;
+  }
 
   const fileName =
     path.basename(
@@ -247,10 +248,6 @@ export function shouldIgnorePath(
   ) {
     return true;
   }
-
-  /*
-   * User-defined .lumenignore.
-   */
 
   return ignorePatterns.some(
     (pattern) =>

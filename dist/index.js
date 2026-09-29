@@ -4,7 +4,7 @@
 import { Command } from "commander";
 
 // src/commands/scan.command.ts
-import path8 from "path";
+import path9 from "path";
 import pc2 from "picocolors";
 
 // src/analyzers/project.analyzer.ts
@@ -550,7 +550,9 @@ function loadLumenIgnore(projectPath) {
     projectPath,
     ".lumenignore"
   );
-  if (!fs5.existsSync(ignorePath)) {
+  if (!fs5.existsSync(
+    ignorePath
+  )) {
     return [];
   }
   try {
@@ -565,6 +567,14 @@ function loadLumenIgnore(projectPath) {
   } catch {
     return [];
   }
+}
+function mergeIgnorePatterns(lumenIgnore, configIgnore) {
+  return [
+    .../* @__PURE__ */ new Set([
+      ...lumenIgnore,
+      ...configIgnore
+    ])
+  ];
 }
 function globToRegExp(pattern) {
   let regex = "";
@@ -603,7 +613,9 @@ function matchesPattern(relativePath, pattern) {
   let normalizedPattern = normalizePath(
     pattern
   );
-  const isDirectoryPattern = normalizedPattern.endsWith("/");
+  const isDirectoryPattern = normalizedPattern.endsWith(
+    "/"
+  );
   if (isDirectoryPattern) {
     normalizedPattern = normalizedPattern.replace(
       /\/+$/,
@@ -615,12 +627,17 @@ function matchesPattern(relativePath, pattern) {
       `${normalizedPattern}/`
     );
   }
-  if (!normalizedPattern.includes("/")) {
-    const parts = normalizedPath.split("/");
+  if (!normalizedPattern.includes(
+    "/"
+  )) {
+    const parts = normalizedPath.split(
+      "/"
+    );
+    const regex = globToRegExp(
+      normalizedPattern
+    );
     return parts.some(
-      (part) => globToRegExp(
-        normalizedPattern
-      ).test(part)
+      (part) => regex.test(part)
     );
   }
   return globToRegExp(
@@ -636,10 +653,14 @@ function shouldIgnorePath(projectPath, filePath, ignorePatterns = []) {
       filePath
     )
   );
-  if (relativePath === "" || relativePath.startsWith("../")) {
+  if (relativePath === "" || relativePath.startsWith(
+    "../"
+  )) {
     return true;
   }
-  const parts = relativePath.split("/");
+  const parts = relativePath.split(
+    "/"
+  );
   if (parts.some(
     (part) => DEFAULT_IGNORED_DIRECTORIES.has(
       part
@@ -702,7 +723,9 @@ function getFiles(projectPath, ignorePatterns) {
         continue;
       }
       if (entry.isFile()) {
-        files.push(fullPath);
+        files.push(
+          fullPath
+        );
       }
     }
   }
@@ -712,10 +735,14 @@ function getFiles(projectPath, ignorePatterns) {
 function getLineNumber(content, index) {
   return content.slice(0, index).split("\n").length;
 }
-function analyzeSecrets(projectPath) {
+function analyzeSecrets(projectPath, options = {}) {
   const issues = [];
-  const ignorePatterns = loadLumenIgnore(
+  const fileIgnore = loadLumenIgnore(
     projectPath
+  );
+  const ignorePatterns = mergeIgnorePatterns(
+    fileIgnore,
+    options.ignore ?? []
   );
   const files = getFiles(
     projectPath,
@@ -724,7 +751,9 @@ function analyzeSecrets(projectPath) {
   for (const filePath of files) {
     let content;
     try {
-      const stats = fs6.statSync(filePath);
+      const stats = fs6.statSync(
+        filePath
+      );
       if (stats.size > 1024 * 1024) {
         continue;
       }
@@ -1463,9 +1492,108 @@ function groupIssuesByCategory(issues) {
   };
 }
 
+// src/services/config.service.ts
+import fs9 from "fs";
+import path8 from "path";
+import { pathToFileURL } from "url";
+var CONFIG_FILES = [
+  "lumen.config.ts",
+  "lumen.config.mts",
+  "lumen.config.js",
+  "lumen.config.mjs"
+];
+var DEFAULT_CONFIG = {
+  ignore: [],
+  security: {
+    failOn: "error"
+  }
+};
+async function loadLumenConfig(projectPath) {
+  const configPath = findConfigFile(projectPath);
+  if (!configPath) {
+    return {
+      ...DEFAULT_CONFIG,
+      security: {
+        ...DEFAULT_CONFIG.security
+      }
+    };
+  }
+  try {
+    const module = await import(pathToFileURL(
+      configPath
+    ).href);
+    const userConfig = module.default ?? module;
+    return normalizeConfig(
+      userConfig
+    );
+  } catch (error) {
+    console.warn(
+      `Warning: Unable to load ${path8.basename(configPath)}.`
+    );
+    if (error instanceof Error) {
+      console.warn(
+        `  ${error.message}`
+      );
+    }
+    return {
+      ...DEFAULT_CONFIG,
+      security: {
+        ...DEFAULT_CONFIG.security
+      }
+    };
+  }
+}
+function findConfigFile(projectPath) {
+  for (const fileName of CONFIG_FILES) {
+    const configPath = path8.join(
+      projectPath,
+      fileName
+    );
+    if (fs9.existsSync(configPath)) {
+      return configPath;
+    }
+  }
+  return null;
+}
+function normalizeConfig(config) {
+  if (!config || typeof config !== "object") {
+    return {
+      ...DEFAULT_CONFIG,
+      security: {
+        ...DEFAULT_CONFIG.security
+      }
+    };
+  }
+  const raw = config;
+  const rawSecurity = raw.security;
+  let failOn = DEFAULT_CONFIG.security?.failOn;
+  if (rawSecurity && typeof rawSecurity === "object") {
+    const security = rawSecurity;
+    if (security.failOn === "error" || security.failOn === "warning" || security.failOn === "none") {
+      failOn = security.failOn;
+    }
+  }
+  const ignore = Array.isArray(
+    raw.ignore
+  ) ? raw.ignore.filter(
+    (value) => typeof value === "string"
+  ) : [];
+  return {
+    ignore,
+    security: {
+      failOn
+    }
+  };
+}
+
 // src/commands/scan.command.ts
 async function scanCommand(projectPath = ".", options = {}) {
-  const absolutePath = path8.resolve(projectPath);
+  const absolutePath = path9.resolve(
+    projectPath
+  );
+  const config = await loadLumenConfig(
+    absolutePath
+  );
   const projectIssues = analyzeProject(
     absolutePath
   );
@@ -1476,7 +1604,10 @@ async function scanCommand(projectPath = ".", options = {}) {
     absolutePath
   );
   const secretIssues = analyzeSecrets(
-    absolutePath
+    absolutePath,
+    {
+      ignore: config.ignore
+    }
   );
   const environmentIssues = analyzeEnvironment(
     absolutePath
@@ -1498,7 +1629,10 @@ async function scanCommand(projectPath = ".", options = {}) {
         absolutePath
       )
     );
-    if (hasBlockingIssues(issues)) {
+    if (shouldFail(
+      issues,
+      config.security?.failOn
+    )) {
       process.exitCode = 1;
     }
     return;
@@ -1549,14 +1683,27 @@ async function scanCommand(projectPath = ".", options = {}) {
   printSummary(
     issues
   );
-  if (hasBlockingIssues(issues)) {
+  if (shouldFail(
+    issues,
+    config.security?.failOn
+  )) {
     process.exitCode = 1;
   }
 }
-function hasBlockingIssues(issues) {
-  return issues.some(
-    (issue) => issue.severity === "error"
-  );
+function shouldFail(issues, failOn) {
+  switch (failOn ?? "error") {
+    case "none":
+      return false;
+    case "warning":
+      return issues.some(
+        (issue) => issue.severity === "warning" || issue.severity === "error"
+      );
+    case "error":
+    default:
+      return issues.some(
+        (issue) => issue.severity === "error"
+      );
+  }
 }
 function printCategory(title, issues) {
   if (issues.length === 0) {
@@ -1590,9 +1737,9 @@ program.command("scan").description(
   "--json",
   "Output scan results as JSON"
 ).action(
-  async (path9, options) => {
+  async (path10, options) => {
     await scanCommand(
-      path9,
+      path10,
       options
     );
   }

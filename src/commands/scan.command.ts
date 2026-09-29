@@ -24,7 +24,13 @@ import {
   groupIssuesByCategory
 } from "../utils/issue.utils.js";
 
-import type { Issue } from "../types/issue.js";
+import {
+  loadLumenConfig
+} from "../services/config.service.js";
+
+import type {
+  Issue
+} from "../types/issue.js";
 
 export interface ScanOptions {
   json?: boolean;
@@ -35,10 +41,21 @@ export async function scanCommand(
   options: ScanOptions = {}
 ) {
   const absolutePath =
-    path.resolve(projectPath);
+    path.resolve(
+      projectPath
+    );
 
   /*
-   * Run all analyzers.
+   * Load Lumen configuration.
+   */
+
+  const config =
+    await loadLumenConfig(
+      absolutePath
+    );
+
+  /*
+   * Run analyzers.
    */
 
   const projectIssues =
@@ -58,7 +75,11 @@ export async function scanCommand(
 
   const secretIssues =
     analyzeSecrets(
-      absolutePath
+      absolutePath,
+      {
+        ignore:
+          config.ignore
+      }
     );
 
   const environmentIssues =
@@ -67,7 +88,7 @@ export async function scanCommand(
     );
 
   /*
-   * Combine all issues.
+   * Combine issues.
    */
 
   const rawIssues: Issue[] = [
@@ -79,7 +100,7 @@ export async function scanCommand(
   ];
 
   /*
-   * Remove duplicated issues.
+   * Remove duplicates.
    */
 
   const issues =
@@ -91,7 +112,9 @@ export async function scanCommand(
    * JSON mode.
    */
 
-  if (options.json) {
+  if (
+    options.json
+  ) {
     console.log(
       formatJsonResult(
         issues,
@@ -99,13 +122,11 @@ export async function scanCommand(
       )
     );
 
-    /*
-     * Exit with error when
-     * at least one error exists.
-     */
-
     if (
-      hasBlockingIssues(issues)
+      shouldFail(
+        issues,
+        config.security?.failOn
+      )
     ) {
       process.exitCode = 1;
     }
@@ -178,32 +199,56 @@ export async function scanCommand(
     issues
   );
 
-  /*
-   * Exit with error when
-   * at least one error exists.
-   */
-
   if (
-    hasBlockingIssues(issues)
+    shouldFail(
+      issues,
+      config.security?.failOn
+    )
   ) {
     process.exitCode = 1;
   }
 }
 
-function hasBlockingIssues(
-  issues: Issue[]
+function shouldFail(
+  issues: Issue[],
+  failOn:
+    | "error"
+    | "warning"
+    | "none"
+    | undefined
 ): boolean {
-  return issues.some(
-    (issue) =>
-      issue.severity === "error"
-  );
+  switch (
+    failOn ?? "error"
+  ) {
+    case "none":
+      return false;
+
+    case "warning":
+      return issues.some(
+        (issue) =>
+          issue.severity ===
+            "warning" ||
+          issue.severity ===
+            "error"
+      );
+
+    case "error":
+    default:
+      return issues.some(
+        (issue) =>
+          issue.severity ===
+          "error"
+      );
+  }
 }
 
 function printCategory(
   title: string,
   issues: Issue[]
 ) {
-  if (issues.length === 0) {
+  if (
+    issues.length === 0
+  ) {
     return;
   }
 
@@ -217,7 +262,9 @@ function printCategory(
     )
   );
 
-  for (const issue of issues) {
+  for (
+    const issue of issues
+  ) {
     printIssue(issue);
   }
 }

@@ -9,8 +9,13 @@ import {
 
 import {
   loadLumenIgnore,
+  mergeIgnorePatterns,
   shouldIgnorePath
 } from "../utils/ignore.utils.js";
+
+export interface SecretAnalyzerOptions {
+  ignore?: string[];
+}
 
 function getFiles(
   projectPath: string,
@@ -45,7 +50,9 @@ function getFiles(
       return;
     }
 
-    for (const entry of entries) {
+    for (
+      const entry of entries
+    ) {
       const fullPath =
         path.join(
           directory,
@@ -72,7 +79,9 @@ function getFiles(
       if (
         entry.isFile()
       ) {
-        files.push(fullPath);
+        files.push(
+          fullPath
+        );
       }
     }
   }
@@ -95,13 +104,20 @@ function getLineNumber(
 }
 
 export function analyzeSecrets(
-  projectPath: string
+  projectPath: string,
+  options: SecretAnalyzerOptions = {}
 ): Issue[] {
   const issues: Issue[] = [];
 
-  const ignorePatterns =
+  const fileIgnore =
     loadLumenIgnore(
       projectPath
+    );
+
+  const ignorePatterns =
+    mergeIgnorePatterns(
+      fileIgnore,
+      options.ignore ?? []
     );
 
   const files =
@@ -110,16 +126,16 @@ export function analyzeSecrets(
       ignorePatterns
     );
 
-  for (const filePath of files) {
+  for (
+    const filePath of files
+  ) {
     let content: string;
 
     try {
       const stats =
-        fs.statSync(filePath);
-
-      /*
-       * Ignore files larger than 1 MB.
-       */
+        fs.statSync(
+          filePath
+        );
 
       if (
         stats.size >
@@ -195,11 +211,6 @@ export function analyzeSecrets(
           }
         });
 
-        /*
-         * Prevent infinite loops
-         * for zero-length matches.
-         */
-
         if (
           match[0].length === 0
         ) {
@@ -215,12 +226,9 @@ export function analyzeSecrets(
     return [
       {
         severity: "info",
-
         category: "security",
-
         title:
           "No secrets detected",
-
         message:
           "No known hardcoded secrets were detected in the scanned files."
       }
