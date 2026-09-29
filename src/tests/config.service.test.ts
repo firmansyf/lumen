@@ -52,7 +52,7 @@ describe(
   "config.service",
   () => {
     it(
-      "should return default config when no config file exists",
+      "should return default config",
       async () => {
         const project =
           createTempProject();
@@ -67,8 +67,23 @@ describe(
         ).toEqual([]);
 
         expect(
-          config.security?.failOn
+          config.failOn
         ).toBe("error");
+
+        expect(
+          config.dependency
+            ?.checkUpdates
+        ).toBe(true);
+
+        expect(
+          config.security
+            ?.enabled
+        ).toBe(true);
+
+        expect(
+          config.environment
+            ?.enabled
+        ).toBe(true);
       }
     );
 
@@ -89,8 +104,19 @@ describe(
               "fixtures/",
               "generated/"
             ],
+
+            failOn: "warning",
+
+            dependency: {
+              checkUpdates: false
+            },
+
             security: {
-              failOn: "warning"
+              enabled: false
+            },
+
+            environment: {
+              enabled: false
             }
           };
           `
@@ -109,8 +135,23 @@ describe(
         ]);
 
         expect(
-          config.security?.failOn
+          config.failOn
         ).toBe("warning");
+
+        expect(
+          config.dependency
+            ?.checkUpdates
+        ).toBe(false);
+
+        expect(
+          config.security
+            ?.enabled
+        ).toBe(false);
+
+        expect(
+          config.environment
+            ?.enabled
+        ).toBe(false);
       }
     );
 
@@ -152,7 +193,7 @@ describe(
     );
 
     it(
-      "should normalize invalid failOn values",
+      "should normalize invalid failOn",
       async () => {
         const project =
           createTempProject();
@@ -164,9 +205,7 @@ describe(
           ),
           `
           export default {
-            security: {
-              failOn: "invalid"
-            }
+            failOn: "invalid"
           };
           `
         );
@@ -177,7 +216,7 @@ describe(
           );
 
         expect(
-          config.security?.failOn
+          config.failOn
         ).toBe("error");
       }
     );
@@ -195,9 +234,7 @@ describe(
           ),
           `
           export default {
-            security: {
-              failOn: "none"
-            }
+            failOn: "none"
           };
           `
         );
@@ -208,7 +245,7 @@ describe(
           );
 
         expect(
-          config.security?.failOn
+          config.failOn
         ).toBe("none");
       }
     );

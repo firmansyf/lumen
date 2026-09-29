@@ -1504,19 +1504,21 @@ var CONFIG_FILES = [
 ];
 var DEFAULT_CONFIG = {
   ignore: [],
+  failOn: "error",
+  dependency: {
+    checkUpdates: true
+  },
   security: {
-    failOn: "error"
+    enabled: true
+  },
+  environment: {
+    enabled: true
   }
 };
 async function loadLumenConfig(projectPath) {
   const configPath = findConfigFile(projectPath);
   if (!configPath) {
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
   try {
     const module = await import(pathToFileURL(
@@ -1535,12 +1537,7 @@ async function loadLumenConfig(projectPath) {
         `  ${error.message}`
       );
     }
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
 }
 function findConfigFile(projectPath) {
@@ -1555,34 +1552,92 @@ function findConfigFile(projectPath) {
   }
   return null;
 }
+function createDefaultConfig() {
+  return {
+    ignore: [
+      ...DEFAULT_CONFIG.ignore
+    ],
+    failOn: DEFAULT_CONFIG.failOn,
+    dependency: {
+      ...DEFAULT_CONFIG.dependency
+    },
+    security: {
+      ...DEFAULT_CONFIG.security
+    },
+    environment: {
+      ...DEFAULT_CONFIG.environment
+    }
+  };
+}
 function normalizeConfig(config) {
   if (!config || typeof config !== "object") {
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
   const raw = config;
-  const rawSecurity = raw.security;
-  let failOn = DEFAULT_CONFIG.security?.failOn;
-  if (rawSecurity && typeof rawSecurity === "object") {
-    const security = rawSecurity;
-    if (security.failOn === "error" || security.failOn === "warning" || security.failOn === "none") {
-      failOn = security.failOn;
-    }
-  }
   const ignore = Array.isArray(
     raw.ignore
   ) ? raw.ignore.filter(
     (value) => typeof value === "string"
-  ) : [];
+  ) : [
+    ...DEFAULT_CONFIG.ignore
+  ];
+  const failOn = normalizeFailOn(
+    raw.failOn
+  );
+  const dependency = normalizeDependencyConfig(
+    raw.dependency
+  );
+  const security = normalizeSecurityConfig(
+    raw.security
+  );
+  const environment = normalizeEnvironmentConfig(
+    raw.environment
+  );
   return {
     ignore,
-    security: {
-      failOn
-    }
+    failOn,
+    dependency,
+    security,
+    environment
+  };
+}
+function normalizeFailOn(value) {
+  if (value === "error" || value === "warning" || value === "none") {
+    return value;
+  }
+  return DEFAULT_CONFIG.failOn;
+}
+function normalizeDependencyConfig(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      ...DEFAULT_CONFIG.dependency
+    };
+  }
+  const raw = value;
+  return {
+    checkUpdates: typeof raw.checkUpdates === "boolean" ? raw.checkUpdates : DEFAULT_CONFIG.dependency.checkUpdates
+  };
+}
+function normalizeSecurityConfig(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      ...DEFAULT_CONFIG.security
+    };
+  }
+  const raw = value;
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.security.enabled
+  };
+}
+function normalizeEnvironmentConfig(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      ...DEFAULT_CONFIG.environment
+    };
+  }
+  const raw = value;
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_CONFIG.environment.enabled
   };
 }
 
@@ -1597,19 +1652,19 @@ async function scanCommand(projectPath = ".", options = {}) {
   const projectIssues = analyzeProject(
     absolutePath
   );
-  const dependencyIssues = await analyzeDependencies(
+  const dependencyIssues = config.dependency?.checkUpdates === false ? [] : await analyzeDependencies(
     absolutePath
   );
-  const securityIssues = await analyzeSecurity(
+  const securityIssues = config.security?.enabled === false ? [] : await analyzeSecurity(
     absolutePath
   );
-  const secretIssues = analyzeSecrets(
+  const secretIssues = config.security?.enabled === false ? [] : analyzeSecrets(
     absolutePath,
     {
       ignore: config.ignore
     }
   );
-  const environmentIssues = analyzeEnvironment(
+  const environmentIssues = config.environment?.enabled === false ? [] : analyzeEnvironment(
     absolutePath
   );
   const rawIssues = [
@@ -1631,7 +1686,7 @@ async function scanCommand(projectPath = ".", options = {}) {
     );
     if (shouldFail(
       issues,
-      config.security?.failOn
+      config.failOn
     )) {
       process.exitCode = 1;
     }
@@ -1685,13 +1740,13 @@ async function scanCommand(projectPath = ".", options = {}) {
   );
   if (shouldFail(
     issues,
-    config.security?.failOn
+    config.failOn
   )) {
     process.exitCode = 1;
   }
 }
 function shouldFail(issues, failOn) {
-  switch (failOn ?? "error") {
+  switch (failOn) {
     case "none":
       return false;
     case "warning":

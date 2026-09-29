@@ -45,17 +45,13 @@ export async function scanCommand(
       projectPath
     );
 
-  /*
-   * Load Lumen configuration.
-   */
-
   const config =
     await loadLumenConfig(
       absolutePath
     );
 
   /*
-   * Run analyzers.
+   * Project analyzer
    */
 
   const projectIssues =
@@ -63,32 +59,60 @@ export async function scanCommand(
       absolutePath
     );
 
+  /*
+   * Dependency analyzer
+   */
+
   const dependencyIssues =
-    await analyzeDependencies(
-      absolutePath
-    );
-
-  const securityIssues =
-    await analyzeSecurity(
-      absolutePath
-    );
-
-  const secretIssues =
-    analyzeSecrets(
-      absolutePath,
-      {
-        ignore:
-          config.ignore
-      }
-    );
-
-  const environmentIssues =
-    analyzeEnvironment(
-      absolutePath
-    );
+    config.dependency?.checkUpdates ===
+    false
+      ? []
+      : await analyzeDependencies(
+          absolutePath
+        );
 
   /*
-   * Combine issues.
+   * Security analyzer
+   */
+
+  const securityIssues =
+    config.security?.enabled ===
+    false
+      ? []
+      : await analyzeSecurity(
+          absolutePath
+        );
+
+  /*
+   * Secret analyzer
+   */
+
+  const secretIssues =
+    config.security?.enabled ===
+    false
+      ? []
+      : analyzeSecrets(
+          absolutePath,
+          {
+            ignore:
+              config.ignore
+          }
+        );
+
+  /*
+   * Environment analyzer
+   */
+
+  const environmentIssues =
+    config.environment?.enabled ===
+    false
+      ? []
+      : analyzeEnvironment(
+          absolutePath
+        );
+
+  /*
+   * Combine all issues.
    */
 
   const rawIssues: Issue[] = [
@@ -125,7 +149,7 @@ export async function scanCommand(
     if (
       shouldFail(
         issues,
-        config.security?.failOn
+        config.failOn
       )
     ) {
       process.exitCode = 1;
@@ -202,7 +226,7 @@ export async function scanCommand(
   if (
     shouldFail(
       issues,
-      config.security?.failOn
+      config.failOn
     )
   ) {
     process.exitCode = 1;
@@ -215,11 +239,8 @@ function shouldFail(
     | "error"
     | "warning"
     | "none"
-    | undefined
 ): boolean {
-  switch (
-    failOn ?? "error"
-  ) {
+  switch (failOn) {
     case "none":
       return false;
 

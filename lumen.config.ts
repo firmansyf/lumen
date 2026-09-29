@@ -8,8 +8,18 @@ const config: LumenConfig = {
     "fixtures/"
   ],
 
+  failOn: "error",
+
+  dependency: {
+    checkUpdates: true
+  },
+
   security: {
-    failOn: "error"
+    enabled: true
+  },
+
+  environment: {
+    enabled: true
   }
 };
 

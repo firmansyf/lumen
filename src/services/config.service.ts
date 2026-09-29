@@ -3,7 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import type {
-  LumenConfig
+  LumenConfig,
+  LumenFailSeverity
 } from "../types/config.js";
 
 const CONFIG_FILES = [
@@ -13,11 +14,21 @@ const CONFIG_FILES = [
   "lumen.config.mjs"
 ];
 
-const DEFAULT_CONFIG: LumenConfig = {
+const DEFAULT_CONFIG: Required<LumenConfig> = {
   ignore: [],
 
+  failOn: "error",
+
+  dependency: {
+    checkUpdates: true
+  },
+
   security: {
-    failOn: "error"
+    enabled: true
+  },
+
+  environment: {
+    enabled: true
   }
 };
 
@@ -28,12 +39,7 @@ export async function loadLumenConfig(
     findConfigFile(projectPath);
 
   if (!configPath) {
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
 
   try {
@@ -61,12 +67,7 @@ export async function loadLumenConfig(
       );
     }
 
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
 }
 
@@ -92,6 +93,29 @@ function findConfigFile(
   return null;
 }
 
+function createDefaultConfig(): LumenConfig {
+  return {
+    ignore: [
+      ...DEFAULT_CONFIG.ignore
+    ],
+
+    failOn:
+      DEFAULT_CONFIG.failOn,
+
+    dependency: {
+      ...DEFAULT_CONFIG.dependency
+    },
+
+    security: {
+      ...DEFAULT_CONFIG.security
+    },
+
+    environment: {
+      ...DEFAULT_CONFIG.environment
+    }
+  };
+}
+
 function normalizeConfig(
   config: unknown
 ): LumenConfig {
@@ -99,12 +123,7 @@ function normalizeConfig(
     !config ||
     typeof config !== "object"
   ) {
-    return {
-      ...DEFAULT_CONFIG,
-      security: {
-        ...DEFAULT_CONFIG.security
-      }
-    };
+    return createDefaultConfig();
   }
 
   const raw =
@@ -112,32 +131,6 @@ function normalizeConfig(
       string,
       unknown
     >;
-
-  const rawSecurity =
-    raw.security;
-
-  let failOn =
-    DEFAULT_CONFIG.security?.failOn;
-
-  if (
-    rawSecurity &&
-    typeof rawSecurity === "object"
-  ) {
-    const security =
-      rawSecurity as Record<
-        string,
-        unknown
-      >;
-
-    if (
-      security.failOn === "error" ||
-      security.failOn === "warning" ||
-      security.failOn === "none"
-    ) {
-      failOn =
-        security.failOn;
-    }
-  }
 
   const ignore =
     Array.isArray(
@@ -150,13 +143,140 @@ function normalizeConfig(
             typeof value ===
             "string"
         )
-      : [];
+      : [
+          ...DEFAULT_CONFIG.ignore
+        ];
+
+  const failOn =
+    normalizeFailOn(
+      raw.failOn
+    );
+
+  const dependency =
+    normalizeDependencyConfig(
+      raw.dependency
+    );
+
+  const security =
+    normalizeSecurityConfig(
+      raw.security
+    );
+
+  const environment =
+    normalizeEnvironmentConfig(
+      raw.environment
+    );
 
   return {
     ignore,
 
-    security: {
-      failOn
-    }
+    failOn,
+
+    dependency,
+
+    security,
+
+    environment
+  };
+}
+
+function normalizeFailOn(
+  value: unknown
+): LumenFailSeverity {
+  if (
+    value === "error" ||
+    value === "warning" ||
+    value === "none"
+  ) {
+    return value;
+  }
+
+  return DEFAULT_CONFIG.failOn;
+}
+
+function normalizeDependencyConfig(
+  value: unknown
+): LumenConfig["dependency"] {
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
+    return {
+      ...DEFAULT_CONFIG.dependency
+    };
+  }
+
+  const raw =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  return {
+    checkUpdates:
+      typeof raw.checkUpdates ===
+      "boolean"
+        ? raw.checkUpdates
+        : DEFAULT_CONFIG
+            .dependency
+            .checkUpdates
+  };
+}
+
+function normalizeSecurityConfig(
+  value: unknown
+): LumenConfig["security"] {
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
+    return {
+      ...DEFAULT_CONFIG.security
+    };
+  }
+
+  const raw =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  return {
+    enabled:
+      typeof raw.enabled ===
+      "boolean"
+        ? raw.enabled
+        : DEFAULT_CONFIG
+            .security
+            .enabled
+  };
+}
+
+function normalizeEnvironmentConfig(
+  value: unknown
+): LumenConfig["environment"] {
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
+    return {
+      ...DEFAULT_CONFIG.environment
+    };
+  }
+
+  const raw =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  return {
+    enabled:
+      typeof raw.enabled ===
+      "boolean"
+        ? raw.enabled
+        : DEFAULT_CONFIG
+            .environment
+            .enabled
   };
 }
