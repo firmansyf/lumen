@@ -1,10 +1,16 @@
 {
   "name": "lumen-cli",
   "version": "0.1.0",
-  "description": "Illuminate your code.",
+  "description": "Illuminate your code. A developer project health and diagnostics CLI.",
   "type": "module",
   "bin": {
-    "lumen": "./dist/index.js"
+    "lumen": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
@@ -13,17 +19,28 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "keywords": [
+    "cli",
+    "developer-tools",
+    "code-quality",
+    "security",
+    "dependency",
+    "diagnostics",
+    "developer-experience"
+  ],
+  "author": "Yusuf Firmansyah",
+  "license": "MIT",
   "dependencies": {
     "commander": "^14.0.0",
     "picocolors": "^1.1.1",
-    "semver": "^7.8.5"
+    "semver": "^7.7.0"
   },
   "devDependencies": {
-    "@types/node": "^24.19.0",
-    "@types/semver": "^7.8.0",
+    "@types/node": "^24.0.0",
+    "@types/semver": "^7.7.0",
     "tsup": "^8.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
-    "vitest": "^5.0.2"
+    "vitest": "^3.0.0"
   }
 }
