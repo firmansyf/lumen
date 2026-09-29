@@ -7,87 +7,77 @@ import {
   SECRET_PATTERNS
 } from "../utils/secret.utils.js";
 
-const IGNORED_DIRECTORIES = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  ".next",
-  ".expo",
-  "coverage",
-  ".cache"
-]);
-
-const IGNORED_FILES = new Set([
-  "package-lock.json",
-  "pnpm-lock.yaml",
-  "yarn.lock"
-]);
-
-function shouldIgnore(
-  filePath: string
-): boolean {
-  const parts = filePath.split(
-    path.sep
-  );
-
-  if (
-    parts.some((part) =>
-      IGNORED_DIRECTORIES.has(part)
-    )
-  ) {
-    return true;
-  }
-
-  return IGNORED_FILES.has(
-    path.basename(filePath)
-  );
-}
+import {
+  loadLumenIgnore,
+  shouldIgnorePath
+} from "../utils/ignore.utils.js";
 
 function getFiles(
-  directory: string
+  projectPath: string,
+  ignorePatterns: string[]
 ): string[] {
   const files: string[] = [];
 
-  if (shouldIgnore(directory)) {
-    return files;
-  }
+  function walk(
+    directory: string
+  ) {
+    if (
+      shouldIgnorePath(
+        projectPath,
+        directory,
+        ignorePatterns
+      )
+    ) {
+      return;
+    }
 
-  let entries: fs.Dirent[];
+    let entries: fs.Dirent[];
 
-  try {
-    entries = fs.readdirSync(
-      directory,
-      {
-        withFileTypes: true
+    try {
+      entries =
+        fs.readdirSync(
+          directory,
+          {
+            withFileTypes: true
+          }
+        );
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath =
+        path.join(
+          directory,
+          entry.name
+        );
+
+      if (
+        shouldIgnorePath(
+          projectPath,
+          fullPath,
+          ignorePatterns
+        )
+      ) {
+        continue;
       }
-    );
-  } catch {
-    return files;
-  }
 
-  for (const entry of entries) {
-    const fullPath = path.join(
-      directory,
-      entry.name
-    );
+      if (
+        entry.isDirectory()
+      ) {
+        walk(fullPath);
+        continue;
+      }
 
-    if (shouldIgnore(fullPath)) {
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      files.push(
-        ...getFiles(fullPath)
-      );
-
-      continue;
-    }
-
-    if (entry.isFile()) {
-      files.push(fullPath);
+      if (
+        entry.isFile()
+      ) {
+        files.push(fullPath);
+      }
     }
   }
+
+  walk(projectPath);
 
   return files;
 }
@@ -99,7 +89,8 @@ function getLineNumber(
   return (
     content
       .slice(0, index)
-      .split("\n").length
+      .split("\n")
+      .length
   );
 }
 
@@ -108,9 +99,16 @@ export function analyzeSecrets(
 ): Issue[] {
   const issues: Issue[] = [];
 
-  const files = getFiles(
-    projectPath
-  );
+  const ignorePatterns =
+    loadLumenIgnore(
+      projectPath
+    );
+
+  const files =
+    getFiles(
+      projectPath,
+      ignorePatterns
+    );
 
   for (const filePath of files) {
     let content: string;
@@ -119,30 +117,47 @@ export function analyzeSecrets(
       const stats =
         fs.statSync(filePath);
 
-      if (stats.size > 1024 * 1024) {
+      /*
+       * Ignore files larger than 1 MB.
+       */
+
+      if (
+        stats.size >
+        1024 * 1024
+      ) {
         continue;
       }
 
-      content = fs.readFileSync(
-        filePath,
-        "utf-8"
-      );
+      content =
+        fs.readFileSync(
+          filePath,
+          "utf-8"
+        );
     } catch {
       continue;
     }
 
-    for (const secret of SECRET_PATTERNS) {
-      const regex = new RegExp(
-        secret.pattern.source,
-        secret.pattern.flags.includes("g")
-          ? secret.pattern.flags
-          : `${secret.pattern.flags}g`
-      );
+    for (
+      const secret of SECRET_PATTERNS
+    ) {
+      const regex =
+        new RegExp(
+          secret.pattern.source,
+          secret.pattern.flags.includes(
+            "g"
+          )
+            ? secret.pattern.flags
+            : `${secret.pattern.flags}g`
+        );
 
-      let match: RegExpExecArray | null;
+      let match:
+        RegExpExecArray | null;
 
       while (
-        (match = regex.exec(content)) !== null
+        (match =
+          regex.exec(
+            content
+          )) !== null
       ) {
         const relativePath =
           path.relative(
@@ -173,27 +188,39 @@ export function analyzeSecrets(
             "Remove the secret from source code and store it in environment variables or a secure secret manager.",
 
           metadata: {
-            secretType: secret.type,
+            secretType:
+              secret.type,
+
             line
           }
         });
 
-        // Prevent infinite loops
-        // for zero-length matches.
-        if (match[0].length === 0) {
+        /*
+         * Prevent infinite loops
+         * for zero-length matches.
+         */
+
+        if (
+          match[0].length === 0
+        ) {
           regex.lastIndex++;
         }
       }
     }
   }
 
-  if (issues.length === 0) {
+  if (
+    issues.length === 0
+  ) {
     return [
       {
         severity: "info",
+
         category: "security",
+
         title:
           "No secrets detected",
+
         message:
           "No known hardcoded secrets were detected in the scanned files."
       }

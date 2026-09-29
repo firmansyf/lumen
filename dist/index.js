@@ -4,7 +4,7 @@
 import { Command } from "commander";
 
 // src/commands/scan.command.ts
-import path7 from "path";
+import path8 from "path";
 import pc2 from "picocolors";
 
 // src/analyzers/project.analyzer.ts
@@ -482,8 +482,8 @@ async function analyzeSecurity(projectPath) {
 }
 
 // src/analyzers/secret.analyzer.ts
-import fs5 from "fs";
-import path5 from "path";
+import fs6 from "fs";
+import path6 from "path";
 
 // src/utils/secret.utils.ts
 var SECRET_PATTERNS = [
@@ -524,8 +524,10 @@ var SECRET_PATTERNS = [
   }
 ];
 
-// src/analyzers/secret.analyzer.ts
-var IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
+// src/utils/ignore.utils.ts
+import fs5 from "fs";
+import path5 from "path";
+var DEFAULT_IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
   "dist",
@@ -535,58 +537,176 @@ var IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
   "coverage",
   ".cache"
 ]);
-var IGNORED_FILES = /* @__PURE__ */ new Set([
+var DEFAULT_IGNORED_FILES = /* @__PURE__ */ new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock"
 ]);
-function shouldIgnore(filePath) {
-  const parts = filePath.split(
-    path5.sep
+function normalizePath(value) {
+  return value.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
+}
+function loadLumenIgnore(projectPath) {
+  const ignorePath = path5.join(
+    projectPath,
+    ".lumenignore"
   );
+  if (!fs5.existsSync(ignorePath)) {
+    return [];
+  }
+  try {
+    return fs5.readFileSync(
+      ignorePath,
+      "utf-8"
+    ).split(/\r?\n/).map(
+      (line) => line.trim()
+    ).filter(
+      (line) => line.length > 0 && !line.startsWith("#")
+    );
+  } catch {
+    return [];
+  }
+}
+function globToRegExp(pattern) {
+  let regex = "";
+  let index = 0;
+  while (index < pattern.length) {
+    const char = pattern[index];
+    if (char === "*") {
+      if (pattern[index + 1] === "*") {
+        regex += ".*";
+        index += 2;
+        continue;
+      }
+      regex += "[^/]*";
+      index++;
+      continue;
+    }
+    if (char === "?") {
+      regex += "[^/]";
+      index++;
+      continue;
+    }
+    regex += char.replace(
+      /[.+^${}()|[\]\\]/g,
+      "\\$&"
+    );
+    index++;
+  }
+  return new RegExp(
+    `^${regex}$`
+  );
+}
+function matchesPattern(relativePath, pattern) {
+  const normalizedPath = normalizePath(
+    relativePath
+  );
+  let normalizedPattern = normalizePath(
+    pattern
+  );
+  const isDirectoryPattern = normalizedPattern.endsWith("/");
+  if (isDirectoryPattern) {
+    normalizedPattern = normalizedPattern.replace(
+      /\/+$/,
+      ""
+    );
+  }
+  if (isDirectoryPattern) {
+    return normalizedPath === normalizedPattern || normalizedPath.startsWith(
+      `${normalizedPattern}/`
+    );
+  }
+  if (!normalizedPattern.includes("/")) {
+    const parts = normalizedPath.split("/");
+    return parts.some(
+      (part) => globToRegExp(
+        normalizedPattern
+      ).test(part)
+    );
+  }
+  return globToRegExp(
+    normalizedPattern
+  ).test(
+    normalizedPath
+  );
+}
+function shouldIgnorePath(projectPath, filePath, ignorePatterns = []) {
+  const relativePath = normalizePath(
+    path5.relative(
+      projectPath,
+      filePath
+    )
+  );
+  if (relativePath === "" || relativePath.startsWith("../")) {
+    return true;
+  }
+  const parts = relativePath.split("/");
   if (parts.some(
-    (part) => IGNORED_DIRECTORIES.has(part)
+    (part) => DEFAULT_IGNORED_DIRECTORIES.has(
+      part
+    )
   )) {
     return true;
   }
-  return IGNORED_FILES.has(
-    path5.basename(filePath)
+  const fileName = path5.basename(
+    relativePath
+  );
+  if (DEFAULT_IGNORED_FILES.has(
+    fileName
+  )) {
+    return true;
+  }
+  return ignorePatterns.some(
+    (pattern) => matchesPattern(
+      relativePath,
+      pattern
+    )
   );
 }
-function getFiles(directory) {
+
+// src/analyzers/secret.analyzer.ts
+function getFiles(projectPath, ignorePatterns) {
   const files = [];
-  if (shouldIgnore(directory)) {
-    return files;
-  }
-  let entries;
-  try {
-    entries = fs5.readdirSync(
+  function walk(directory) {
+    if (shouldIgnorePath(
+      projectPath,
       directory,
-      {
-        withFileTypes: true
-      }
-    );
-  } catch {
-    return files;
-  }
-  for (const entry of entries) {
-    const fullPath = path5.join(
-      directory,
-      entry.name
-    );
-    if (shouldIgnore(fullPath)) {
-      continue;
+      ignorePatterns
+    )) {
+      return;
     }
-    if (entry.isDirectory()) {
-      files.push(
-        ...getFiles(fullPath)
+    let entries;
+    try {
+      entries = fs6.readdirSync(
+        directory,
+        {
+          withFileTypes: true
+        }
       );
-      continue;
+    } catch {
+      return;
     }
-    if (entry.isFile()) {
-      files.push(fullPath);
+    for (const entry of entries) {
+      const fullPath = path6.join(
+        directory,
+        entry.name
+      );
+      if (shouldIgnorePath(
+        projectPath,
+        fullPath,
+        ignorePatterns
+      )) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (entry.isFile()) {
+        files.push(fullPath);
+      }
     }
   }
+  walk(projectPath);
   return files;
 }
 function getLineNumber(content, index) {
@@ -594,17 +714,21 @@ function getLineNumber(content, index) {
 }
 function analyzeSecrets(projectPath) {
   const issues = [];
-  const files = getFiles(
+  const ignorePatterns = loadLumenIgnore(
     projectPath
+  );
+  const files = getFiles(
+    projectPath,
+    ignorePatterns
   );
   for (const filePath of files) {
     let content;
     try {
-      const stats = fs5.statSync(filePath);
+      const stats = fs6.statSync(filePath);
       if (stats.size > 1024 * 1024) {
         continue;
       }
-      content = fs5.readFileSync(
+      content = fs6.readFileSync(
         filePath,
         "utf-8"
       );
@@ -614,11 +738,15 @@ function analyzeSecrets(projectPath) {
     for (const secret of SECRET_PATTERNS) {
       const regex = new RegExp(
         secret.pattern.source,
-        secret.pattern.flags.includes("g") ? secret.pattern.flags : `${secret.pattern.flags}g`
+        secret.pattern.flags.includes(
+          "g"
+        ) ? secret.pattern.flags : `${secret.pattern.flags}g`
       );
       let match;
-      while ((match = regex.exec(content)) !== null) {
-        const relativePath = path5.relative(
+      while ((match = regex.exec(
+        content
+      )) !== null) {
+        const relativePath = path6.relative(
           projectPath,
           filePath
         );
@@ -658,11 +786,11 @@ function analyzeSecrets(projectPath) {
 }
 
 // src/analyzers/environment.analyzer.ts
-import fs7 from "fs";
-import path6 from "path";
+import fs8 from "fs";
+import path7 from "path";
 
 // src/utils/environment.utils.ts
-import fs6 from "fs";
+import fs7 from "fs";
 function parseEnvironmentVariables(content) {
   const variables = /* @__PURE__ */ new Set();
   const lines = content.split("\n");
@@ -682,11 +810,11 @@ function parseEnvironmentVariables(content) {
   return variables;
 }
 function readEnvironmentFile(filePath) {
-  if (!fs6.existsSync(filePath)) {
+  if (!fs7.existsSync(filePath)) {
     return /* @__PURE__ */ new Set();
   }
   try {
-    const content = fs6.readFileSync(
+    const content = fs7.readFileSync(
       filePath,
       "utf-8"
     );
@@ -712,7 +840,7 @@ function extractEnvironmentVariables(content) {
 }
 
 // src/analyzers/environment.analyzer.ts
-var IGNORED_DIRECTORIES2 = /* @__PURE__ */ new Set([
+var IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
   "node_modules",
   ".git",
   "dist",
@@ -722,7 +850,7 @@ var IGNORED_DIRECTORIES2 = /* @__PURE__ */ new Set([
   "coverage",
   ".cache"
 ]);
-var IGNORED_FILES2 = /* @__PURE__ */ new Set([
+var IGNORED_FILES = /* @__PURE__ */ new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock"
@@ -737,25 +865,25 @@ var SOURCE_EXTENSIONS = /* @__PURE__ */ new Set([
   ".mts",
   ".cts"
 ]);
-function shouldIgnore2(filePath) {
-  const parts = filePath.split(path6.sep);
+function shouldIgnore(filePath) {
+  const parts = filePath.split(path7.sep);
   if (parts.some(
-    (part) => IGNORED_DIRECTORIES2.has(part)
+    (part) => IGNORED_DIRECTORIES.has(part)
   )) {
     return true;
   }
-  return IGNORED_FILES2.has(
-    path6.basename(filePath)
+  return IGNORED_FILES.has(
+    path7.basename(filePath)
   );
 }
 function getSourceFiles(directory) {
   const files = [];
-  if (shouldIgnore2(directory)) {
+  if (shouldIgnore(directory)) {
     return files;
   }
   let entries;
   try {
-    entries = fs7.readdirSync(
+    entries = fs8.readdirSync(
       directory,
       {
         withFileTypes: true
@@ -765,11 +893,11 @@ function getSourceFiles(directory) {
     return files;
   }
   for (const entry of entries) {
-    const fullPath = path6.join(
+    const fullPath = path7.join(
       directory,
       entry.name
     );
-    if (shouldIgnore2(fullPath)) {
+    if (shouldIgnore(fullPath)) {
       continue;
     }
     if (entry.isDirectory()) {
@@ -783,7 +911,7 @@ function getSourceFiles(directory) {
     if (!entry.isFile()) {
       continue;
     }
-    const extension = path6.extname(entry.name);
+    const extension = path7.extname(entry.name);
     if (SOURCE_EXTENSIONS.has(
       extension
     )) {
@@ -803,11 +931,11 @@ function getReferencedVariables(projectPath) {
   for (const filePath of files) {
     let content;
     try {
-      const stats = fs7.statSync(filePath);
+      const stats = fs8.statSync(filePath);
       if (stats.size > 1024 * 1024) {
         continue;
       }
-      content = fs7.readFileSync(
+      content = fs8.readFileSync(
         filePath,
         "utf-8"
       );
@@ -833,7 +961,7 @@ function getReferencedVariables(projectPath) {
       if (!match) {
         continue;
       }
-      const relativePath = path6.relative(
+      const relativePath = path7.relative(
         projectPath,
         filePath
       );
@@ -852,18 +980,18 @@ function getReferencedVariables(projectPath) {
   return references;
 }
 function isGitignored(projectPath, target) {
-  const gitignorePath = path6.join(
+  const gitignorePath = path7.join(
     projectPath,
     ".gitignore"
   );
-  if (!fs7.existsSync(
+  if (!fs8.existsSync(
     gitignorePath
   )) {
     return false;
   }
   let content;
   try {
-    content = fs7.readFileSync(
+    content = fs8.readFileSync(
       gitignorePath,
       "utf-8"
     );
@@ -905,16 +1033,16 @@ function isGitignored(projectPath, target) {
 }
 function analyzeEnvironment(projectPath) {
   const issues = [];
-  const envPath = path6.join(
+  const envPath = path7.join(
     projectPath,
     ".env"
   );
-  const envExamplePath = path6.join(
+  const envExamplePath = path7.join(
     projectPath,
     ".env.example"
   );
-  const hasEnv = fs7.existsSync(envPath);
-  const hasEnvExample = fs7.existsSync(
+  const hasEnv = fs8.existsSync(envPath);
+  const hasEnvExample = fs8.existsSync(
     envExamplePath
   );
   const envVariables = readEnvironmentFile(
@@ -1337,7 +1465,7 @@ function groupIssuesByCategory(issues) {
 
 // src/commands/scan.command.ts
 async function scanCommand(projectPath = ".", options = {}) {
-  const absolutePath = path7.resolve(projectPath);
+  const absolutePath = path8.resolve(projectPath);
   const projectIssues = analyzeProject(
     absolutePath
   );
@@ -1462,9 +1590,9 @@ program.command("scan").description(
   "--json",
   "Output scan results as JSON"
 ).action(
-  async (path8, options) => {
+  async (path9, options) => {
     await scanCommand(
-      path8,
+      path9,
       options
     );
   }
